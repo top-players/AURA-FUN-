@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-touch-fullscreen" content="yes" />
+  <title>Flappy Bird Aura Levels</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #7a0000;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    .hud {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      font-weight: bold;
+      text-align: center;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.75);
+      pointer-events: none;
+      width: 100%;
+    }
+    .level {
+      font-size: 18px;
+      margin-top: 2px;
+    }
+    .hint {
+      font-size: 14px;
+      font-weight: normal;
+      margin-top: 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div id="levelText" class="level">Level 1</div>
+    <div class="hint">Tap / Click / Space = flap, R = restart</div>
+  </div>
+
+  <canvas id="game"></canvas>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const levelTextEl = document.getElementById("levelText");
+
+    const birdImg = new Image(); birdImg.src = "uu.png";
+    const flyingImg = new Image(); flyingImg.src = "flying.png";
+    const modiImg = new Image(); modiImg.src = "modi.png";
+
+    const voiceBase = new Audio("u.mp3");
+    const loseBase = new Audio("modi.mp3");
+    const gyaBase = new Audio("gya.mp3");
+    const aajaBase = new Audio("aaja.mp3");
+    const clapBase = new Audio("clap.mp3");
+    [voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(a => a.preload = "auto");
+
+    let W = 0, H = 0, DPR = 1;
+    let bird, obstacles = [], eggBursts = [], tapAudioPool = [];
+    let score = 0, best = Number(localStorage.getItem("flappy_best") || 0);
+    let gameOver = false, started = false, isRunning = true;
+    let spawnTimer = 0, startTime = 0, level = 1;
+    let obstacleType = "pipe";
+    let levelMessageTimer = 0;
+    let winState = false;
+    let finishX = null;
+
+    let gravity = 0.45;
+    let flapPower = -8.5;
+    let obstacleSpeed = 3.1;
+    let obstacleGap = 175;
+    let obstacleWidth = 92;
+    const groundH = 92;
+
+    function resizeCanvas() {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      DPR = Math.max(1, window.devicePixelRatio || 1);
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+      canvas.width = Math.floor(W * DPR);
+      canvas.height = Math.floor(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      if (bird) bird.x = W * 0.22;
+      finishX = W - 140;
+    }
+
+    function stopAudio(a) { a.pause(); a.currentTime = 0; }
+
+    function resetAllAudio() {
+      [voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(stopAudio);
+      tapAudioPool.forEach(stopAudio);
+      tapAudioPool = [];
+    }
+
+    function resetGame() {
+      resetAllAudio();
+      bird = { x: W * 0.22, y: H * 0.35, w: 54, h: 40, vy: 0, rot: 0 };
+      obstacles = [];
+      eggBursts = [];
+      score = 0;
+      level = 1;
+      obstacleType = "pipe";
+      gameOver = false;
+      winState = false;
+      started = false;
+      isRunning = true;
+      spawnTimer = 0;
+      startTime = performance.now();
+      levelMessageTimer = 0;
+      levelTextEl.textContent = "Level 1";
+      gravity = 0.45;
+      flapPower = -8.5;
+      obstacleSpeed = 3.1;
+      obstacleGap = 175;
+      obstacleWidth = 92;
+      finishX = W - 140;
+    }
+
+    function playTapSound() {
+      const a = voiceBase.cloneNode(true);
+      a.volume = 0.9;
+      a.currentTime = 0;
+      a.play().catch(() => {});
+      tapAudioPool.push(a);
+      tapAudioPool = tapAudioPool.filter(x => !x.ended && !x.paused);
+    }
+
+    function playLoseSound() {
+      resetAllAudio();
+      loseBase.currentTime = 0;
+      loseBase.play().catch(() => {});
+    }
+
+    function playLevelSound(src) {
+      const s = new Audio(src);
+      s.volume = 0.95;
+      s.currentTime = 0;
+      s.play().catch(() => {});
+    }
+
+    function playClap() {
+      const s = clapBase.cloneNode(true);
+      s.volume = 1;
+      s.currentTime = 0;
+      s.play().catch(() => {});
+    }
+
+    function burstEgg() {
+      const cx = bird.x, cy = bird.y + 4;
+      for (let i = 0; i < 8; i++) {
+        eggBursts.push({
+          x: cx, y: cy,
+          vx: (Math.random() - 0.5) * 5.5,
+          vy: -2 - Math.random() * 4.5,
+          r: 3 + Math.random() * 3,
+          life: 60 + Math.floor(Math.random() * 20),
+          rot: Math.random() * Math.PI * 2
+        });
+      }
+    }
+
+    function flap() {
+      playTapSound();
+      if (gameOver || winState) { resetGame(); return; }
+      if (!started) started = true;
+      bird.vy = flapPower;
+      burstEgg();
+    }
+
+    function endGame() {
+      if (gameOver || winState) return;
+      gameOver = true;
+      isRunning = false;
+      if (score > best) {
+        best = score;
+        localStorage.setItem("flappy_best", best);
+      }
+      playLoseSound();
+    }
+
+    function finishGame() {
+      if (gameOver || winState) return;
+      winState = true;
+      isRunning = false;
+      playClap();
+    }
+
+    function applyLevel(newLevel) {
+      if (newLevel === level) return;
+      level = newLevel;
+      levelTextEl.textContent = "Level " + level;
+      levelMessageTimer = 120;
+
+      if (level === 2) {
+        obstacleType = "flying";
+        playLevelSound("aaja.mp3");
+      } else if (level >= 3) {
+        obstacleType = "modi";
+        playLevelSound("gya.mp3");
+      }
+
+      obstacleSpeed = 3.4 + (level - 1) * 0.7;
+      obstacleGap = Math.max(100, 175 - (level - 1) * 14);
+      gravity = Math.min(0.85, 0.45 + (level - 1) * 0.045);
+      flapPower = -8.5 - (level - 1) * 0.16;
+      obstacleWidth = obstacleType === "pipe" ? 92 : 78;
+    }
+
+    function checkLevelUp(now) {
+      const elapsed = now - startTime;
+      const timeLevel = 1 + Math.floor(elapsed / 60000);
+      const scoreLevel = 1 + Math.floor(score / 10);
+      const targetLevel = Math.max(timeLevel, scoreLevel);
+      if (targetLevel > level && level < 3) applyLevel(targetLevel);
+    }
+
+    function spawnObstacle() {
+      if (obstacleType === "pipe") {
+        const minTop = 60;
+        const maxTop = Math.max(120, H - groundH - obstacleGap - 120);
+        const topH = Math.floor(Math.random() * (maxTop - minTop + 1)) + minTop;
+        const faces = ["🤣", "🤪", "😝", "🥴", "👀"];
+        obstacles.push({
+          x: W + 60, topH, passed: false,
+          wobble: Math.random() * Math.PI * 2,
+          face: faces[Math.floor(Math.random() * faces.length)],
+          kind: "pipe"
+        });
+      } else {
+        const yMin = 60;
+        const yMax = H - groundH - 115;
+        const y = Math.floor(Math.random() * Math.max(1, yMax - yMin + 1)) + yMin;
+        obstacles.push({
+          x: W + 80,
+          y,
+          passed: false,
+          kind: obstacleType
+        });
+      }
+    }
+
+    function hitRect(aLeft, aTop, aRight, aBottom, bLeft, bTop, bRight, bBottom) {
+      return aRight > bLeft && aLeft < bRight && aBottom > bTop && aTop < bBottom;
+    }
+
+    function updateBird() {
+      bird.vy += gravity;
+      bird.y += bird.vy;
+      bird.rot = Math.max(Math.min(bird.vy * 0.07, 1.25), -0.65);
+
+      if (bird.y + bird.h / 2 >= H - groundH) {
+        bird.y = H - groundH - bird.h / 2;
+        endGame();
+      }
+      if (bird.y - bird.h / 2 <= 0) {
+        bird.y = bird.h / 2;
+        bird.vy = 0;
+      }
+    }
+
+    function updateObstacles() {
+      if (started && !gameOver && !winState) {
+        spawnTimer++;
+        let spawnDelay = 100;
+        if (obstacleType === "flying") spawnDelay = 42;
+        if (obstacleType === "modi") spawnDelay = 34;
+        if (spawnTimer > spawnDelay) {
+          spawnTimer = 0;
+          spawnObstacle();
+        }
+      }
+
+      for (const o of obstacles) {
+        o.x -= obstacleSpeed;
+
+        const birdLeft = bird.x - bird.w / 2;
+        const birdRight = bird.x + bird.w / 2;
+        const birdTop = bird.y - bird.h / 2;
+        const birdBottom = bird.y + bird.h / 2;
+
+        if (o.kind === "pipe") {
+          const left = o.x, right = o.x + obstacleWidth;
+          const topBottom = o.topH;
+          const bottomTop = o.topH + obstacleGap;
+
+          const hit =
+            hitRect(birdLeft, birdTop, birdRight, birdBottom, left, 0, right, topBottom) ||
+            hitRect(birdLeft, birdTop, birdRight, birdBottom, left, bottomTop, right, H - groundH);
+
+          if (hit) endGame();
+
+          if (!o.passed && o.x + obstacleWidth < bird.x - bird.w / 2) {
+            o.passed = true;
+            score++;
+            if (score > best) localStorage.setItem("flappy_best", score);
+            if (score % 10 === 0 && level < 3) applyLevel(level + 1);
+          }
+        } else {
+          const img = o.kind === "flying" ? flyingImg : modiImg;
+          const ow = o.kind === "flying" ? 42 : 58;
+          const oh = o.kind === "flying" ? 32 : 44;
+          const bob = Math.sin((o.x + o.y) * 0.03) * 5;
+          const leftX = o.x;
+          const rightX = o.x + 52;
+          const imgY = o.y + bob;
+
+          const topHit = hitRect(birdLeft, birdTop, birdRight, birdBottom, leftX, imgY, leftX + ow, imgY + oh);
+          const bottomHit = hitRect(birdLeft, birdTop, birdRight, birdBottom, rightX, imgY + 12, rightX + ow, imgY + 12 + oh);
+
+          if (topHit || bottomHit) endGame();
+
+          if (!o.passed && o.x + 90 < bird.x - bird.w / 2) {
+            o.passed = true;
+            score++;
+            if (score > best) localStorage.setItem("flappy_best", score);
+            if (score % 10 === 0 && level < 3) applyLevel(level + 1);
+          }
+        }
+      }
+
+      obstacles = obstacles.filter(o => o.x + 200 > -80);
+    }
+
+    function updateEggs() {
+      eggBursts = eggBursts.filter(e => e.life > 0);
+      for (const e of eggBursts) {
+        e.vy += 0.18;
+        e.x += e.vx;
+        e.y += e.vy;
+        e.life--;
+        e.rot += 0.2;
+      }
+    }
+
+    function drawBackground() {
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, "#ff5a5a");
+      grad.addColorStop(1, "#7a0000");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.save();
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold italic 70px 'Arial Black', Arial, sans-serif";
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.strokeText("MADE BY AURA DEVELOPERS", W / 2, H - 55);
+      ctx.fillText("MADE BY AURA DEVELOPERS", W / 2, H - 55);
+      ctx.restore();
+
+      ctx.fillStyle = "rgba(255,255,255,0.16)";
+      for (let i = 0; i < 2; i++) {
+        const cx = (Date.now() * 0.01 * (i + 1)) % (W + 150) - 100;
+        ctx.beginPath();
+        ctx.ellipse(cx, 90 + i * 40, 55, 22, 0, 0, Math.PI * 2);
+        ctx.ellipse(cx + 35, 85 + i * 40, 38, 18, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "#a30000";
+      ctx.fillRect(0, H - groundH, W, groundH);
+      ctx.fillStyle = "#5f0000";
+      ctx.fillRect(0, H - groundH, W, 10);
+    }
+
+    function drawObstacle(o) {
+      if (o.kind === "pipe") {
+        const wiggle = Math.sin(o.wobble + o.x * 0.02) * 4;
+        ctx.fillStyle = "#ffb703";
+        ctx.fillRect(o.x, 0, obstacleWidth, o.topH);
+        ctx.fillRect(o.x, o.topH + obstacleGap, obstacleWidth, H - (o.topH + obstacleGap) - groundH);
+        ctx.fillStyle = "#fb8500";
+        ctx.fillRect(o.x - 8, o.topH - 18, obstacleWidth + 16, 18);
+        ctx.fillRect(o.x - 8, o.topH + obstacleGap, obstacleWidth + 16, 18);
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(o.x + 25, o.topH - 30 + wiggle, 7, 0, Math.PI * 2);
+        ctx.arc(o.x + 55, o.topH - 30 - wiggle, 7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        ctx.arc(o.x + 25, o.topH - 30 + wiggle, 3, 0, Math.PI * 2);
+        ctx.arc(o.x + 55, o.topH - 30 - wiggle, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.font = "22px Arial";
+        ctx.fillText(o.face, o.x + 18, o.topH + 28);
+        ctx.fillText(o.face, o.x + 18, o.topH + obstacleGap - 8);
+      } else {
+        const img = o.kind === "flying" ? flyingImg : modiImg;
+        const ow = o.kind === "flying" ? 42 : 58;
+        const oh = o.kind === "flying" ? 32 : 44;
+        const bob = Math.sin((o.x + o.y) * 0.03) * 5;
+        const leftX = o.x;
+        const rightX = o.x + 52;
+        const imgY = o.y + bob;
+        if (img.complete && img.naturalWidth) {
+          ctx.drawImage(img, leftX, imgY, ow, oh);
+          ctx.drawImage(img, rightX, imgY + 12, ow, oh);
+        }
+      }
+    }
+
+    function drawBird() {
+      ctx.save();
+      ctx.translate(bird.x, bird.y);
+      ctx.rotate(bird.rot);
+      if (birdImg.complete && birdImg.naturalWidth) {
+        ctx.drawImage(birdImg, -bird.w / 2, -bird.h / 2, bird.w, bird.h);
+      } else {
+        ctx.fillStyle = "#ffcc00";
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawEggs() {
+      for (const e of eggBursts) {
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        ctx.rotate(e.rot);
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, e.r * 0.9, e.r * 1.2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#d9d9d9";
+        ctx.beginPath();
+        ctx.arc(0, 0, e.r * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawOverlay() {
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 16px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Level: " + level, W / 2, 30);
+
+      if (levelMessageTimer > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(0, H * 0.23, W, 90);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 30px Arial";
+        ctx.fillText("LEVEL " + level, W / 2, H * 0.23 + 34);
+        ctx.font = "bold 18px Arial";
+        ctx.fillText(level === 2 ? "Flying danger!" : "Modi danger!", W / 2, H * 0.23 + 64);
+        levelMessageTimer--;
+      }
+
+      if (!started && !gameOver && !winState) {
+        ctx.fillStyle = "rgba(0,0,0,0.28)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 28px Arial";
+        ctx.fillText("Tap / Click / Space to Start", W / 2, H / 2);
+      }
+
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 44px Arial";
+        ctx.fillText("Game Over", W / 2, H / 2 - 28);
+        ctx.font = "bold 18px Arial";
+        ctx.fillText("Tap / Click or Press R to Restart", W / 2, H / 2 + 36);
+      }
+
+      if (winState) {
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 52px Arial";
+        ctx.fillText("CONGRATS!", W / 2, H / 2 - 28);
+        ctx.font = "bold 22px Arial";
+        ctx.fillText("You crossed the finish line", W / 2, H / 2 + 12);
+        ctx.font = "bold 18px Arial";
+        ctx.fillText("Tap / Click or Press R to play again", W / 2, H / 2 + 48);
+      }
+    }
+
+    function drawFinishLine() {
+      if (level < 3) return;
+      if (score < 35) return;
+      const fx = finishX;
+      ctx.save();
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(fx, 0, 8, H - groundH);
+      ctx.fillStyle = "#000";
+      for (let y = 0; y < H - groundH; y += 24) {
+        ctx.fillRect(fx, y, 8, 12);
+      }
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 18px Arial";
+      ctx.fillText("FINISH", fx - 20, 28);
+      ctx.restore();
+    }
+
+    function checkFinish() {
+      if (level === 3 && !winState && !gameOver && score >= 35 && bird.x > finishX - 40) {
+        finishGame();
+      }
+    }
+
+    function loop(now) {
+      if (isRunning) {
+        if (started && !gameOver && !winState) checkLevelUp(now);
+        updateBird();
+        updateObstacles();
+        updateEggs();
+        checkFinish();
+      }
+      drawBackground();
+      drawFinishLine();
+      obstacles.forEach(drawObstacle);
+      drawBird();
+      drawEggs();
+      drawOverlay();
+      requestAnimationFrame(loop);
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        flap();
+      }
+      if (e.key.toLowerCase() === "r") resetGame();
+    });
+
+    document.addEventListener("mousedown", flap);
+    document.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      flap();
+    }, { passive: false });
+
+    window.addEventListener("resize", resizeCanvas);
+
+    resizeCanvas();
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
