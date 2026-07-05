@@ -65,15 +65,46 @@
     const flyingImg = new Image(); flyingImg.src = "flying.png";
     const modiImg = new Image(); modiImg.src = "modi.png";
 
+    const levelImages = {
+      4: new Image(),
+      5: new Image(),
+      6: new Image(),
+      7: new Image(),
+      8: new Image(),
+      9: new Image(),
+      10: new Image(),
+      11: new Image(),
+      12: new Image()
+    };
+    levelImages[4].src = "image1.png";
+    levelImages[5].src = "image2.png";
+    levelImages[6].src = "image3.png";
+    levelImages[7].src = "image4.png";
+    levelImages[8].src = "image5.png";
+    levelImages[9].src = "image6.png";
+    levelImages[10].src = "image7.png";
+    levelImages[11].src = "image8.png";
+    levelImages[12].src = "image9.png";
+
+    const knifeImg = new Image(); knifeImg.src = "knife.png";
+    const bossImg = new Image(); bossImg.src = "boss.png";
+    const gunImg = new Image(); gunImg.src = "gun.png";
+    const bulletImg = new Image(); bulletImg.src = "bullet.png";
+
+    const volume1Base = new Audio("volume1.mp3");
+    const volume2Base = new Audio("volume2.mp3");
     const voiceBase = new Audio("u.mp3");
     const loseBase = new Audio("madharchod.mp3");
     const gyaBase = new Audio("gya.mp3");
     const aajaBase = new Audio("aaja.mp3");
     const clapBase = new Audio("clap.mp3");
-    [voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(a => a.preload = "auto");
+    [volume1Base, volume2Base, voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(a => a.preload = "auto");
+
+    let audioUnlocked = false;
+    let lastLevelSoundPlayed = 0;
 
     let W = 0, H = 0, DPR = 1;
-    let bird, obstacles = [], eggBursts = [], tapAudioPool = [];
+    let bird, obstacles = [], eggBursts = [], bullets = [], enemies = [], boss = null, tapAudioPool = [];
     let score = 0, best = Number(localStorage.getItem("flappy_best") || 0);
     let gameOver = false, started = false, isRunning = true;
     let spawnTimer = 0, startTime = 0, level = 1;
@@ -81,6 +112,10 @@
     let levelMessageTimer = 0;
     let winState = false;
     let finishX = null;
+    let gunAmmo = 0;
+    let shootCooldown = 0;
+    let bossHP = 0;
+    let enemySpawnTimer = 0;
 
     let gravity = 0.45;
     let flapPower = -8.5;
@@ -88,6 +123,21 @@
     let obstacleGap = 175;
     let obstacleWidth = 92;
     const groundH = 92;
+
+    function unlockAudio() {
+      if (audioUnlocked) return;
+      [volume1Base, volume2Base, voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(a => {
+        a.muted = true;
+        a.play().then(() => {
+          a.pause();
+          a.currentTime = 0;
+          a.muted = false;
+        }).catch(() => {
+          a.muted = false;
+        });
+      });
+      audioUnlocked = true;
+    }
 
     function resizeCanvas() {
       W = window.innerWidth;
@@ -108,7 +158,7 @@
     }
 
     function resetAllAudio() {
-      [voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(stopAudio);
+      [volume1Base, volume2Base, voiceBase, loseBase, gyaBase, aajaBase, clapBase].forEach(stopAudio);
       tapAudioPool.forEach(stopAudio);
       tapAudioPool = [];
     }
@@ -118,6 +168,9 @@
       bird = { x: W * 0.22, y: H * 0.35, w: 54, h: 40, vy: 0, rot: 0 };
       obstacles = [];
       eggBursts = [];
+      bullets = [];
+      enemies = [];
+      boss = null;
       score = 0;
       level = 1;
       obstacleType = "pipe";
@@ -135,6 +188,11 @@
       obstacleGap = 175;
       obstacleWidth = 92;
       finishX = W - 140;
+      gunAmmo = 0;
+      shootCooldown = 0;
+      bossHP = 0;
+      enemySpawnTimer = 0;
+      lastLevelSoundPlayed = 0;
     }
 
     function playTapSound() {
@@ -206,6 +264,19 @@
       playClap();
     }
 
+    function playLevelStartSound(newLevel) {
+      if (lastLevelSoundPlayed === newLevel) return;
+      if (newLevel === 4) {
+        volume1Base.currentTime = 0;
+        volume1Base.play().catch(() => {});
+        lastLevelSoundPlayed = newLevel;
+      } else if (newLevel === 5) {
+        volume2Base.currentTime = 0;
+        volume2Base.play().catch(() => {});
+        lastLevelSoundPlayed = newLevel;
+      }
+    }
+
     function applyLevel(newLevel) {
       if (newLevel === level) return;
       level = newLevel;
@@ -215,39 +286,57 @@
       if (level === 2) {
         obstacleType = "flying";
         playLevelSound("aaja.mp3");
-      } else if (level >= 3) {
+      } else if (level === 3) {
         obstacleType = "modi";
+        playLevelSound("gya.mp3");
+      } else if (level >= 4 && level <= 12) {
+        obstacleType = "image";
+        playLevelStartSound(level);
+      } else if (level === 13) {
+        obstacleType = "boss";
+        gunAmmo = 8;
+        bossHP = 20;
         playLevelSound("gya.mp3");
       }
 
-      obstacleSpeed = 3.4 + (level - 1) * 0.7;
-      obstacleGap = Math.max(100, 175 - (level - 1) * 14);
-      gravity = Math.min(0.85, 0.45 + (level - 1) * 0.045);
-      flapPower = -8.5 - (level - 1) * 0.16;
-      obstacleWidth = obstacleType === "pipe" ? 92 : 78;
+      const hardLevel = Math.min(level, 12);
+      obstacleSpeed = 3.1 + (hardLevel - 1) * 0.28 + (level >= 13 ? 1.8 : 0);
+      obstacleGap = Math.max(100, 175 - (hardLevel - 1) * 7 - (level >= 13 ? 20 : 0));
+      gravity = Math.min(0.85, 0.45 + (hardLevel - 1) * 0.02 + (level >= 13 ? 0.05 : 0));
+      flapPower = -8.5 - (hardLevel - 1) * 0.08 - (level >= 13 ? 0.1 : 0);
+
+      if (level === 1 || level === 2 || level === 3) {
+        obstacleWidth = obstacleType === "pipe" ? 92 : 78;
+      } else {
+        obstacleWidth = 80;
+      }
     }
 
     function checkLevelUp(now) {
       const elapsed = now - startTime;
       const timeLevel = 1 + Math.floor(elapsed / 60000);
       const scoreLevel = 1 + Math.floor(score / 10);
-      const targetLevel = Math.max(timeLevel, scoreLevel);
-      if (targetLevel > level && level < 3) applyLevel(targetLevel);
+      const targetLevel = Math.min(13, Math.max(timeLevel, scoreLevel));
+      if (targetLevel > level) applyLevel(targetLevel);
     }
 
     function spawnObstacle() {
+      if (level >= 13) return;
+
       if (obstacleType === "pipe") {
         const minTop = 60;
         const maxTop = Math.max(120, H - groundH - obstacleGap - 120);
         const topH = Math.floor(Math.random() * (maxTop - minTop + 1)) + minTop;
         const faces = ["🤣", "🤪", "😝", "🥴", "👀"];
         obstacles.push({
-          x: W + 60, topH, passed: false,
+          x: W + 60,
+          topH,
+          passed: false,
           wobble: Math.random() * Math.PI * 2,
           face: faces[Math.floor(Math.random() * faces.length)],
           kind: "pipe"
         });
-      } else {
+      } else if (obstacleType === "flying" || obstacleType === "modi") {
         const yMin = 60;
         const yMax = H - groundH - 115;
         const y = Math.floor(Math.random() * Math.max(1, yMax - yMin + 1)) + yMin;
@@ -256,6 +345,17 @@
           y,
           passed: false,
           kind: obstacleType
+        });
+      } else if (obstacleType === "image") {
+        const yMin = 60;
+        const yMax = H - groundH - 140;
+        const y = Math.floor(Math.random() * Math.max(1, yMax - yMin + 1)) + yMin;
+        obstacles.push({
+          x: W + 80,
+          y,
+          passed: false,
+          kind: "image",
+          levelImg: levelImages[level]
         });
       }
     }
@@ -279,12 +379,101 @@
       }
     }
 
+    function spawnEnemy() {
+      const yMin = 70;
+      const yMax = H - groundH - 160;
+      const y = Math.floor(Math.random() * Math.max(1, yMax - yMin + 1)) + yMin;
+      enemies.push({
+        x: W + 60,
+        y,
+        w: 54,
+        h: 54,
+        vx: -(2.2 + Math.random() * 0.4),
+        vy: 0,
+        passed: false,
+        life: 1,
+        kind: "knife"
+      });
+    }
+
+    function shoot() {
+      if (level !== 13 || gameOver || winState || gunAmmo <= 0 || shootCooldown > 0) return;
+      bullets.push({
+        x: bird.x + 28,
+        y: bird.y,
+        vx: 10.5,
+        w: 18,
+        h: 8,
+        life: 80
+      });
+      gunAmmo--;
+      shootCooldown = 10;
+    }
+
+    function updateBullets() {
+      bullets = bullets.filter(b => b.life > 0 && b.x < W + 100);
+      for (const b of bullets) {
+        b.x += b.vx;
+        b.life--;
+      }
+    }
+
+    function updateEnemies() {
+      if (level === 13 && !gameOver && !winState) {
+        enemySpawnTimer++;
+        if (enemySpawnTimer > 70) {
+          enemySpawnTimer = 0;
+          spawnEnemy();
+        }
+      }
+
+      const levelMove = Math.min(2.8, 0.7 + level * 0.12);
+
+      for (const e of enemies) {
+        e.x += e.vx * levelMove / 2.8;
+        e.y += Math.sin((e.x + e.y) * 0.04) * 0.9;
+        if (hitRect(bird.x - bird.w / 2, bird.y - bird.h / 2, bird.x + bird.w / 2, bird.y + bird.h / 2, e.x, e.y, e.x + e.w, e.y + e.h)) endGame();
+      }
+
+      enemies = enemies.filter(e => e.x + e.w > -100);
+    }
+
+    function updateBoss() {
+      if (level !== 13) return;
+      if (!boss && started && !gameOver && !winState && score >= 5) {
+        boss = { x: W + 120, y: H * 0.25, w: 150, h: 110, vx: -2.2, vy: 0, phase: 0 };
+      }
+      if (!boss) return;
+
+      boss.x += boss.vx;
+      boss.y += Math.sin(performance.now() * 0.003) * 1.4;
+
+      if (hitRect(bird.x - bird.w / 2, bird.y - bird.h / 2, bird.x + bird.w / 2, bird.y + bird.h / 2, boss.x, boss.y, boss.x + boss.w, boss.y + boss.h)) endGame();
+
+      for (const b of bullets) {
+        if (b.life > 0 && hitRect(b.x, b.y, b.x + b.w, b.y + b.h, boss.x, boss.y, boss.x + boss.w, boss.y + boss.h)) {
+          b.life = 0;
+          bossHP--;
+          if (bossHP <= 0) {
+            boss = null;
+            finishGame();
+          }
+        }
+      }
+    }
+
+    function updateProjectiles() {
+      if (shootCooldown > 0) shootCooldown--;
+      updateBullets();
+    }
+
     function updateObstacles() {
-      if (started && !gameOver && !winState) {
+      if (started && !gameOver && !winState && level < 13) {
         spawnTimer++;
         let spawnDelay = 100;
         if (obstacleType === "flying") spawnDelay = 42;
         if (obstacleType === "modi") spawnDelay = 34;
+        if (obstacleType === "image") spawnDelay = 40;
         if (spawnTimer > spawnDelay) {
           spawnTimer = 0;
           spawnObstacle();
@@ -303,7 +492,6 @@
           const left = o.x, right = o.x + obstacleWidth;
           const topBottom = o.topH;
           const bottomTop = o.topH + obstacleGap;
-
           const hit =
             hitRect(birdLeft, birdTop, birdRight, birdBottom, left, 0, right, topBottom) ||
             hitRect(birdLeft, birdTop, birdRight, birdBottom, left, bottomTop, right, H - groundH);
@@ -314,9 +502,9 @@
             o.passed = true;
             score++;
             if (score > best) localStorage.setItem("flappy_best", score);
-            if (score % 10 === 0 && level < 3) applyLevel(level + 1);
+            if (score % 10 === 0 && level < 13) applyLevel(level + 1);
           }
-        } else {
+        } else if (o.kind === "flying" || o.kind === "modi") {
           const img = o.kind === "flying" ? flyingImg : modiImg;
           const ow = o.kind === "flying" ? 42 : 58;
           const oh = o.kind === "flying" ? 32 : 44;
@@ -334,7 +522,27 @@
             o.passed = true;
             score++;
             if (score > best) localStorage.setItem("flappy_best", score);
-            if (score % 10 === 0 && level < 3) applyLevel(level + 1);
+            if (score % 10 === 0 && level < 13) applyLevel(level + 1);
+          }
+        } else if (o.kind === "image") {
+          const img = o.levelImg || levelImages[level];
+          const ow = 64;
+          const oh = 48;
+          const bob = Math.sin((o.x + o.y) * 0.025) * 4;
+          const leftX = o.x;
+          const rightX = o.x + 56;
+          const imgY = o.y + bob;
+
+          const topHit = hitRect(birdLeft, birdTop, birdRight, birdBottom, leftX, imgY, leftX + ow, imgY + oh);
+          const bottomHit = hitRect(birdLeft, birdTop, birdRight, birdBottom, rightX, imgY + 10, rightX + ow, imgY + 10 + oh);
+
+          if (topHit || bottomHit) endGame();
+
+          if (!o.passed && o.x + 90 < bird.x - bird.w / 2) {
+            o.passed = true;
+            score++;
+            if (score > best) localStorage.setItem("flappy_best", score);
+            if (score % 10 === 0 && level < 13) applyLevel(level + 1);
           }
         }
       }
@@ -409,7 +617,7 @@
         ctx.font = "22px Arial";
         ctx.fillText(o.face, o.x + 18, o.topH + 28);
         ctx.fillText(o.face, o.x + 18, o.topH + obstacleGap - 8);
-      } else {
+      } else if (o.kind === "flying" || o.kind === "modi") {
         const img = o.kind === "flying" ? flyingImg : modiImg;
         const ow = o.kind === "flying" ? 42 : 58;
         const oh = o.kind === "flying" ? 32 : 44;
@@ -420,6 +628,24 @@
         if (img.complete && img.naturalWidth) {
           ctx.drawImage(img, leftX, imgY, ow, oh);
           ctx.drawImage(img, rightX, imgY + 12, ow, oh);
+        } else {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(leftX, imgY, ow, oh);
+          ctx.fillRect(rightX, imgY + 12, ow, oh);
+        }
+      } else if (o.kind === "image") {
+        const img = o.levelImg || levelImages[level];
+        const bob = Math.sin((o.x + o.y) * 0.025) * 4;
+        const leftX = o.x;
+        const rightX = o.x + 56;
+        const imgY = o.y + bob;
+        if (img && img.complete && img.naturalWidth) {
+          ctx.drawImage(img, leftX, imgY, 64, 48);
+          ctx.drawImage(img, rightX, imgY + 10, 64, 48);
+        } else {
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(leftX, imgY, 64, 48);
+          ctx.fillRect(rightX, imgY + 10, 64, 48);
         }
       }
     }
@@ -456,6 +682,13 @@
       }
     }
 
+    function drawProjectile(p) {
+      ctx.save();
+      ctx.fillStyle = "#ffd166";
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.restore();
+    }
+
     function drawOverlay() {
       ctx.fillStyle = "#fff";
       ctx.font = "bold 16px Arial";
@@ -469,7 +702,11 @@
         ctx.font = "bold 30px Arial";
         ctx.fillText("LEVEL " + level, W / 2, H * 0.23 + 34);
         ctx.font = "bold 18px Arial";
-        ctx.fillText(level === 2 ? "Flying danger!" : "Modi danger!", W / 2, H * 0.23 + 64);
+        if (level === 4) ctx.fillText("Shahrukh Khan Danger", W / 2, H * 0.23 + 64);
+        else if (level === 5) ctx.fillText("Amitabh Danger", W / 2, H * 0.23 + 64);
+        else if (level === 2) ctx.fillText("Flying danger!", W / 2, H * 0.23 + 64);
+        else if (level === 13) ctx.fillText("Boss Battle!", W / 2, H * 0.23 + 64);
+        else ctx.fillText("Enemy wave!", W / 2, H * 0.23 + 64);
         levelMessageTimer--;
       }
 
@@ -502,29 +739,57 @@
         ctx.font = "bold 18px Arial";
         ctx.fillText("Tap / Click or Press R to play again", W / 2, H / 2 + 48);
       }
+
+      if (level === 13) {
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 14px Arial";
+        ctx.fillText("Gun Ammo: " + gunAmmo, W / 2, 52);
+      }
     }
 
     function drawFinishLine() {
-      if (level < 3) return;
-      if (score < 35) return;
+      if (level < 13) return;
       const fx = finishX;
       ctx.save();
       ctx.fillStyle = "#fff";
       ctx.fillRect(fx, 0, 8, H - groundH);
       ctx.fillStyle = "#000";
-      for (let y = 0; y < H - groundH; y += 24) {
-        ctx.fillRect(fx, y, 8, 12);
-      }
+      for (let y = 0; y < H - groundH; y += 24) ctx.fillRect(fx, y, 8, 12);
       ctx.fillStyle = "#fff";
       ctx.font = "bold 18px Arial";
       ctx.fillText("FINISH", fx - 20, 28);
       ctx.restore();
     }
 
-    function checkFinish() {
-      if (level === 3 && !winState && !gameOver && score >= 35 && bird.x > finishX - 40) {
-        finishGame();
+    function drawEnemies() {
+      if (level === 13) {
+        for (const e of enemies) {
+          if (knifeImg.complete && knifeImg.naturalWidth) ctx.drawImage(knifeImg, e.x, e.y, e.w, e.h);
+          else {
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(e.x, e.y, e.w, e.h);
+          }
+        }
+        if (boss) {
+          if (bossImg.complete && bossImg.naturalWidth) ctx.drawImage(bossImg, boss.x, boss.y, boss.w, boss.h);
+          else {
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
+          }
+        }
+        if (gunImg.complete && gunImg.naturalWidth) ctx.drawImage(gunImg, bird.x - 6, bird.y - 10, 30, 18);
       }
+    }
+
+    function drawBullets() {
+      for (const b of bullets) {
+        if (bulletImg.complete && bulletImg.naturalWidth) ctx.drawImage(bulletImg, b.x, b.y, b.w, b.h);
+        else drawProjectile(b);
+      }
+    }
+
+    function checkFinish() {
+      if (level === 13 && !winState && !gameOver && bossHP <= 0 && boss === null && started) finishGame();
     }
 
     function loop(now) {
@@ -533,29 +798,43 @@
         updateBird();
         updateObstacles();
         updateEggs();
+        updateProjectiles();
+        updateEnemies();
+        updateBoss();
         checkFinish();
       }
       drawBackground();
       drawFinishLine();
       obstacles.forEach(drawObstacle);
+      drawEnemies();
       drawBird();
+      drawBullets();
       drawEggs();
       drawOverlay();
       requestAnimationFrame(loop);
     }
 
     document.addEventListener("keydown", (e) => {
+      unlockAudio();
       if (e.code === "Space" || e.code === "ArrowUp") {
         e.preventDefault();
-        flap();
+        if (level === 13 && started && !gameOver && !winState) shoot();
+        else flap();
       }
       if (e.key.toLowerCase() === "r") resetGame();
     });
 
-    document.addEventListener("mousedown", flap);
+    document.addEventListener("mousedown", () => {
+      unlockAudio();
+      if (level === 13 && started && !gameOver && !winState) shoot();
+      else flap();
+    });
+
     document.addEventListener("touchstart", (e) => {
       e.preventDefault();
-      flap();
+      unlockAudio();
+      if (level === 13 && started && !gameOver && !winState) shoot();
+      else flap();
     }, { passive: false });
 
     window.addEventListener("resize", resizeCanvas);
